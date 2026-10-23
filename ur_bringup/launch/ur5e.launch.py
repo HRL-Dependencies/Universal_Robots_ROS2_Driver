@@ -32,7 +32,7 @@
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, ThisLaunchFileDir
+from launch.substitutions import EnvironmentVariable, LaunchConfiguration, PythonExpression, ThisLaunchFileDir
 
 
 def generate_launch_description():
@@ -81,11 +81,24 @@ def generate_launch_description():
         )
     )
     
+    declared_arguments.extend([
+        DeclareLaunchArgument(
+            "gripper",
+            default_value=EnvironmentVariable("GRIPPER", default_value="robotiq-2f-urcap"),
+            choices=["robotiq-2f-urcap", "robotiq-2f-usb", "suction"],
+            description="Selected gripper connection from config.env.",
+        ),
+        DeclareLaunchArgument(
+            "gripper_port",
+            default_value=EnvironmentVariable("GRIPPER_PORT", default_value="/dev/ttyUSB0"),
+            description="PC serial device for robotiq-2f-usb only.",
+        ),
+    ])
     declared_arguments.append(
         DeclareLaunchArgument(
             "use_gripper",
-            default_value="true",
-            description="Whether the Robotiq gripper is being used or not.",
+            default_value=PythonExpression(["'true' if '", LaunchConfiguration("gripper"), "' != 'suction' else 'false'"]),
+            description="Enable Robotiq geometry and its selected driver; normally derived from gripper.",
             choices=[
                 "false",
                 "true"
@@ -149,6 +162,8 @@ def generate_launch_description():
             "initial_joint_controller": initial_joint_controller,
             "activate_joint_controller": activate_joint_controller,
             "use_gripper": use_gripper,
+            "gripper": LaunchConfiguration("gripper"),
+            "gripper_port": LaunchConfiguration("gripper_port"),
             "use_custom_gripper": use_custom_gripper,
             "launch_rviz": launch_rviz
         }.items(),

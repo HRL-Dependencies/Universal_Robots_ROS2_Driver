@@ -38,7 +38,7 @@ from ur_moveit_config.launch_common import load_yaml
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.conditions import IfCondition
-from launch.substitutions import Command, FindExecutable, LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import Command, EnvironmentVariable, FindExecutable, LaunchConfiguration, PathJoinSubstitution, PythonExpression
 
 
 def launch_setup(context, *args, **kwargs):
@@ -61,6 +61,12 @@ def launch_setup(context, *args, **kwargs):
     launch_rviz = LaunchConfiguration("launch_rviz")
     launch_servo = LaunchConfiguration("launch_servo")
     use_gripper = LaunchConfiguration("use_gripper")
+    gripper = LaunchConfiguration("gripper").perform(context)
+    gripper_port = LaunchConfiguration("gripper_port")
+    if gripper == "suction" and IfCondition(use_gripper).evaluate(context):
+        raise RuntimeError("use_gripper is for Robotiq geometry; it must be false with gripper:=suction.")
+    robotiq_enabled = gripper != "suction" and IfCondition(use_gripper).evaluate(context)
+    fake_hardware = IfCondition(use_fake_hardware).evaluate(context)
 
     joint_limit_params = PathJoinSubstitution(
         [FindPackageShare(description_package), "config", ur_type, "joint_limits.yaml"]
@@ -120,7 +126,16 @@ def launch_setup(context, *args, **kwargs):
             tf_prefix,
             " ",
             "use_gripper:=",
-            use_gripper,
+            "true" if robotiq_enabled else "false",
+            " ",
+            "gripper_connection:=",
+            "usb" if gripper == "robotiq-2f-usb" else "urcap",
+            " ",
+            "gripper_port:=",
+            gripper_port,
+            " ",
+            "use_fake_hardware:=",
+            use_fake_hardware,
             " ",
         ]
     )
@@ -144,7 +159,7 @@ def launch_setup(context, *args, **kwargs):
             tf_prefix,
             " ",
             "use_gripper:=",
-            use_gripper,
+            "true" if robotiq_enabled else "false",
             " ",
         ]
     )
@@ -196,6 +211,17 @@ def launch_setup(context, *args, **kwargs):
 
     # Trajectory Execution Configuration
     controllers_yaml = load_yaml("ur_moveit_config", "config/controllers.yaml")
+    gripper_controller = None
+    if robotiq_enabled:
+        gripper_controller = (
+            "robotiq_gripper_controller"
+            if fake_hardware or gripper == "robotiq-2f-usb"
+            else "robotiq_2f_urcap_adapter"
+        )
+    for name in ("robotiq_gripper_controller", "robotiq_2f_urcap_adapter"):
+        if name != gripper_controller:
+            controllers_yaml["controller_names"].remove(name)
+            controllers_yaml.pop(name)
     # the scaled_joint_trajectory_controller does not work on fake hardware
     #change_controllers = context.perform_substitution(use_fake_hardware)
     #if change_controllers == "true":
@@ -390,9 +416,24 @@ def generate_launch_description():
     )
     declared_arguments.append(
         DeclareLaunchArgument(
+            "gripper",
+            default_value=EnvironmentVariable("GRIPPER", default_value="robotiq-2f-urcap"),
+            choices=["robotiq-2f-urcap", "robotiq-2f-usb", "suction"],
+            description="Selected gripper connection from config.env.",
+        )
+    )
+    declared_arguments.append(
+        DeclareLaunchArgument(
+            "gripper_port",
+            default_value=EnvironmentVariable("GRIPPER_PORT", default_value="/dev/ttyUSB0"),
+            description="PC serial device for robotiq-2f-usb only.",
+        )
+    )
+    declared_arguments.append(
+        DeclareLaunchArgument(
             "use_gripper",
-            default_value="true",
-            description="Start the gripper and the UR.",
+            default_value=PythonExpression(["'true' if '", LaunchConfiguration("gripper"), "' != 'suction' else 'false'"]),
+            description="Include Robotiq geometry and planning groups; normally derived from gripper.",
         )
     )
     declared_arguments.append(

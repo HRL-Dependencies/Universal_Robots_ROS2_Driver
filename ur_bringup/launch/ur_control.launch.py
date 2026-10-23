@@ -30,10 +30,11 @@
 # Author: Denis Stogl
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.actions import OpaqueFunction
 from launch.conditions import IfCondition, UnlessCondition
-from launch.substitutions import Command, FindExecutable, LaunchConfiguration, PathJoinSubstitution
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import Command, EnvironmentVariable, FindExecutable, LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
@@ -73,9 +74,23 @@ def launch_setup(context, *args, **kwargs):
     tool_tcp_port = LaunchConfiguration("tool_tcp_port")
     tool_voltage = LaunchConfiguration("tool_voltage")
     use_gripper = LaunchConfiguration("use_gripper")
+    gripper = LaunchConfiguration("gripper").perform(context)
+    gripper_port = LaunchConfiguration("gripper_port")
     use_custom_gripper = LaunchConfiguration("use_custom_gripper")
     is_ur5_setup = LaunchConfiguration("is_ur5_setup")
     is_ur5e_setup = LaunchConfiguration("is_ur5e_setup")
+
+    fake_hardware = IfCondition(use_fake_hardware).evaluate(context)
+    if gripper == "suction" and IfCondition(use_gripper).evaluate(context):
+        raise RuntimeError("use_gripper is for Robotiq geometry; it must be false with gripper:=suction.")
+    robotiq_enabled = gripper != "suction" and IfCondition(use_gripper).evaluate(context)
+    serial_gripper = robotiq_enabled and (gripper == "robotiq-2f-usb" or fake_hardware)
+    if robotiq_enabled and gripper == "robotiq-2f-urcap" and IfCondition(use_tool_communication).evaluate(context):
+        raise RuntimeError("The Robotiq URCap owns the tool serial interface; keep use_tool_communication:=false.")
+    if gripper == "robotiq-2f-usb" and robotiq_enabled and not fake_hardware:
+        port = gripper_port.perform(context)
+        if not port.startswith("/dev/") or not os.access(port, os.R_OK | os.W_OK):
+            raise RuntimeError(f"Gripper USB device is missing or inaccessible: {port}. Set GRIPPER_PORT in config.env.")
 
     joint_limit_params = PathJoinSubstitution(
         [FindPackageShare(description_package), "config", ur_type, "joint_limits.yaml"]
@@ -181,7 +196,13 @@ def launch_setup(context, *args, **kwargs):
             tool_voltage,
             " ",
             "use_gripper:=",
-            use_gripper,
+            "true" if robotiq_enabled else "false",
+            " ",
+            "gripper_connection:=",
+            "usb" if gripper == "robotiq-2f-usb" else "urcap",
+            " ",
+            "gripper_port:=",
+            gripper_port,
             " ",
             "use_custom_gripper:=",
             use_custom_gripper,
@@ -231,7 +252,7 @@ def launch_setup(context, *args, **kwargs):
 
     dashboard_client_node = Node(
         package="ur_robot_driver",
-        condition=IfCondition(launch_dashboard_client) and UnlessCondition(use_fake_hardware),
+        condition=IfCondition(str(IfCondition(launch_dashboard_client).evaluate(context) and not fake_hardware).lower()),
         executable="dashboard_client",
         name="dashboard_client",
         output="screen",
@@ -241,7 +262,7 @@ def launch_setup(context, *args, **kwargs):
 
     tool_communication_node = Node(
         package="ur_robot_driver",
-        condition=IfCondition(use_tool_communication),
+        condition=IfCondition(str(IfCondition(use_tool_communication).evaluate(context) and not fake_hardware).lower()),
         executable="tool_communication.py",
         name="ur_tool_comm",
         output="screen",
@@ -270,7 +291,8 @@ def launch_setup(context, *args, **kwargs):
                     "force_torque_sensor_broadcaster",
                     "joint_state_broadcaster",
                     "speed_scaling_state_broadcaster",
-                ]
+                ] + (["robotiq_gripper_controller", "robotiq_activation_controller"]
+                     if serial_gripper and not fake_hardware else [])
             },
         ],
     )
@@ -347,15 +369,30 @@ def launch_setup(context, *args, **kwargs):
         package="controller_manager",
         executable="spawner",
         arguments=["robotiq_gripper_controller", "-c", "/controller_manager"],
-        condition=IfCondition(use_gripper),
+        condition=IfCondition(str(serial_gripper).lower()),
     )
 
     robotiq_activation_controller_spawner = launch_ros.actions.Node(
         package="controller_manager",
         executable="spawner",
         arguments=["robotiq_activation_controller", "-c", "/controller_manager"],
-        condition=IfCondition(use_gripper),
+        condition=IfCondition(str(serial_gripper and not fake_hardware).lower()),
     )
+
+    gripper_nodes = []
+    if robotiq_enabled and gripper == "robotiq-2f-urcap" and not fake_hardware:
+        gripper_nodes.append(Node(
+            package="robotiq_2f_urcap_adapter",
+            executable="robotiq_2f_adapter_node.py",
+            parameters=[{"robot_ip": robot_ip, "auto_calibrate": False}],
+            output="screen",
+        ))
+    elif gripper == "suction" and not fake_hardware:
+        gripper_nodes.append(IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(PathJoinSubstitution([
+                FindPackageShare("ecpmi_gripper"), "launch", "suction_gripper.launch.py"
+            ])),
+        ))
     
  
 
@@ -378,7 +415,7 @@ def launch_setup(context, *args, **kwargs):
         robotiq_activation_controller_spawner,
     ]
 
-    return nodes_to_start
+    return nodes_to_start + gripper_nodes
 
 
 def generate_launch_description():
@@ -582,9 +619,24 @@ def generate_launch_description():
     )
     declared_arguments.append(
         DeclareLaunchArgument(
+            "gripper",
+            default_value=EnvironmentVariable("GRIPPER", default_value="robotiq-2f-urcap"),
+            choices=["robotiq-2f-urcap", "robotiq-2f-usb", "suction"],
+            description="Selected gripper connection from config.env.",
+        )
+    )
+    declared_arguments.append(
+        DeclareLaunchArgument(
+            "gripper_port",
+            default_value=EnvironmentVariable("GRIPPER_PORT", default_value="/dev/ttyUSB0"),
+            description="PC serial device for robotiq-2f-usb only.",
+        )
+    )
+    declared_arguments.append(
+        DeclareLaunchArgument(
             "use_gripper",
-            default_value="true",
-            description="Start the gripper and the UR.",
+            default_value=PythonExpression(["'true' if '", LaunchConfiguration("gripper"), "' != 'suction' else 'false'"]),
+            description="Enable Robotiq geometry and its selected driver; normally derived from gripper.",
         )
     )
     declared_arguments.append(

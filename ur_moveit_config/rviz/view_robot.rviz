@@ -227,7 +227,7 @@ Visualization Manager:
         Goal State Color: 250; 128; 0
         Interactive Marker Size: 0
         Joint Violation Color: 255; 0; 255
-        Planning Group: gripper
+        Planning Group: ur_manipulator
         Query Goal State: true
         Query Start State: false
         Show Workspace: false
@@ -574,25 +574,25 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 2.790900468826294
+      Distance: 2.2
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
       Focal Point:
-        X: -0.36187008023262024
-        Y: -0.00673046987503767
-        Z: 0.4008283019065857
+        X: 0.36
+        Y: -0.07
+        Z: 0.15
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.12039808183908463
+      Pitch: 0.6
       Target Frame: <Fixed Frame>
       Value: Orbit (rviz)
-      Yaw: 1.0453977584838867
+      Yaw: 2.4
     Saved: ~
 Window Geometry:
   Displays:
